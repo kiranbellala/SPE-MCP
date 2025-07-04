@@ -131,6 +131,49 @@ namespace SpeMcp
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
+        [McpServerTool, Description("Upload a file to a SharePoint Embedded container (drive). Supports large files.")]
+        public static async Task<string> UploadFileToContainer(
+            [FromServices] GraphServiceClient graphClient,
+            [Description("Drive ID or Container ID")] string driveId,
+            [Description("Destination folder path within the container (optional, default is root)")] string? folderPath,
+            [Description("File name")] string fileName,
+            [Description("File bytes as base64 string")] string fileBase64)
+        {
+            try
+            {
+                // Decode the file content
+                byte[] fileBytes = Convert.FromBase64String(fileBase64);
+                using var fileStream = new System.IO.MemoryStream(fileBytes);
+
+                // Determine the upload path
+                string uploadPath = string.IsNullOrEmpty(folderPath)
+                    ? $"/{fileName}"
+                    : (folderPath.StartsWith("/") ? folderPath : "/" + folderPath) + $"/{fileName}";
+
+                // Remove trailing slash if present
+                if (uploadPath.EndsWith("/"))
+                {
+                    uploadPath = uploadPath.TrimEnd('/');
+                }
+
+                // Upload the file using the v5 SDK pattern
+                var uploadedItem = await graphClient.Drives[driveId].Root.ItemWithPath(uploadPath).Content.PutAsync(fileStream);
+
+                if (uploadedItem != null)
+                {
+                    return JsonSerializer.Serialize(uploadedItem, _jsonOptions);
+                }
+                else
+                {
+                    return "File upload did not succeed.";
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"Error uploading file: {ex.Message}";
+            }
+        }
+
         [McpServerTool, Description("Lists SharePoint Embedded containers of a specific container type.")]
         public static async Task<string> ListContainersByType(
             [FromServices] GraphBeta.GraphServiceClient graphBetaClient,
@@ -177,8 +220,7 @@ namespace SpeMcp
                 return $"Error getting container details: {ex.Message}";
             }
         }
-        
-        
+
         [McpServerTool, Description("List files and folders in a SharePoint Embedded container.")]
         public static async Task<string> ListContainerItems(
             [FromServices] GraphServiceClient graphClient,
@@ -190,7 +232,7 @@ namespace SpeMcp
                 // In SharePoint Embedded, the container ID is the drive ID
                 // Get children items based on the specified path
                 DriveItemCollectionResponse? result;
-                
+
                 if (string.IsNullOrEmpty(folderPath))
                 {
                     // Get items from the root folder
@@ -199,24 +241,24 @@ namespace SpeMcp
                 else
                 {
                     // For folder paths, use the path-based approach
-                    try 
+                    try
                     {
                         // Format the path correctly
                         var pathRequest = folderPath.StartsWith("/") ? folderPath : "/" + folderPath;
-                        
+
                         // Remove trailing slash if present
                         if (pathRequest.EndsWith("/"))
                         {
                             pathRequest = pathRequest.Substring(0, pathRequest.Length - 1);
                         }
-                        
+
                         // Get the folder as an item first
                         var folderItem = await graphClient.Drives[containerId].Root.ItemWithPath(pathRequest).GetAsync();
                         if (folderItem == null)
                         {
                             return $"Folder path '{folderPath}' not found in the container.";
                         }
-                        
+
                         // Get children of the folder using its ID
                         result = await graphClient.Drives[containerId].Items[folderItem.Id].Children.GetAsync();
                     }
@@ -225,13 +267,13 @@ namespace SpeMcp
                         return $"Error accessing folder path '{folderPath}': {pathEx.Message}";
                     }
                 }
-                
+
                 // Check if we got any results
                 if (result?.Value == null || !result.Value.Any())
                 {
                     return "No items found in the specified location.";
                 }
-                
+
                 // Format the result nicely
                 return JsonSerializer.Serialize(result.Value, _jsonOptions);
             }
