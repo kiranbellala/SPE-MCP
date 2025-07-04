@@ -1,0 +1,5 @@
+# Update the .gitignore to ensure appsettings.json is excluded for future security
+# (use appsettings.template.json for your template)
+/appsettings.json
+/appsettings.*.json
+!appsettings.template.json
