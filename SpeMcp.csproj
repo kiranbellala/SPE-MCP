@@ -11,6 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.11.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.6" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="9.0.6" />
     <PackageReference Include="Microsoft.Graph" Version="5.84.0" />
     <PackageReference Include="Microsoft.Graph.Beta" Version="5.114.0-preview" />
     <PackageReference Include="Microsoft.Graph.Core" Version="3.2.4" />

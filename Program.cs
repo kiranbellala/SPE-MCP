@@ -1,21 +1,16 @@
-//https://laurentkempe.com/2025/03/22/model-context-protocol-made-easy-building-an-mcp-server-in-csharp/
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Graph;
-using Microsoft.Graph.Models;
-using GraphBeta = Microsoft.Graph.Beta;
 using GraphBetaModels = Microsoft.Graph.Beta.Models;
+using GraphBeta = Microsoft.Graph.Beta;
 using ModelContextProtocol.Server;
-using System;
 using System.ComponentModel;
-using System.Net.Http;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Azure.Identity;
-
+using Microsoft.Graph;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Graph.Models;
 // Custom attribute to inject services into MCP tools
 [AttributeUsage(AttributeTargets.Parameter)]
 public class FromServicesAttribute : Attribute { }
@@ -119,8 +114,8 @@ namespace SpeMcp
 
             await builder.Build().RunAsync();
         }
+        // ...existing code...
     }
-
 
     [McpServerToolType]
     public static class SharePointEmbeddedTool
@@ -130,6 +125,95 @@ namespace SpeMcp
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
+
+        [McpServerTool, Description("Create a new SharePoint Embedded container (drive) of a specific container type.")]
+        public static async Task<string> CreateContainer(
+            [FromServices] GraphBeta.GraphServiceClient graphBetaClient,
+            [Description("Container Type ID")] string containerTypeId,
+            [Description("Display name for the new container")] string displayName)
+        {
+            try
+            {
+                var container = new GraphBetaModels.FileStorageContainer
+                {
+                    DisplayName = displayName,
+                    ContainerTypeId = Guid.Parse(containerTypeId),
+                    Settings = new GraphBetaModels.FileStorageContainerSettings
+                    {
+                        IsOcrEnabled = false
+                    }
+                };
+
+                var created = await graphBetaClient.Storage.FileStorage.Containers.PostAsync(container);
+                if (created == null)
+                {
+                    return "Container creation failed.";
+                }
+                return JsonSerializer.Serialize(created, _jsonOptions);
+            }
+            catch (Exception ex)
+            {
+                return $"Error creating container: {ex.Message}";
+            }
+            // No extra closing brace here; keep class open for other methods
+        }
+
+        [McpServerTool, Description("Add a column (metadata field) to a SharePoint Embedded container (drive).")]
+        public static async Task<string> AddColumnToContainer(
+            [FromServices] GraphBeta.GraphServiceClient graphBetaClient,
+            [Description("Container (Drive) ID")] string containerId,
+            [Description("Column display name")] string displayName,
+            [Description("Column type (e.g., text, number, boolean)")] string columnType)
+        {
+            try
+            {
+                var column = new GraphBetaModels.ColumnDefinition
+                {
+                    DisplayName = displayName,
+                };
+
+                // Set the column type
+                switch (columnType.ToLowerInvariant())
+                {
+                    case "text":
+                        column.Text = new GraphBetaModels.TextColumn();
+                        break;
+                    case "number":
+                        column.Number = new GraphBetaModels.NumberColumn();
+                        break;
+                    case "boolean":
+                    case "bool":
+                        column.Boolean = new GraphBetaModels.BooleanColumn();
+                        break;
+                    default:
+                        return $"Unsupported column type: {columnType}. Supported types: text, number, boolean.";
+                }
+
+                // Get the list associated with the drive (container)
+                var list = await graphBetaClient.Drives[containerId].List.GetAsync();
+                if (list == null)
+                {
+                    return $"No SharePoint List found for container (drive) ID {containerId}.";
+                }
+                if (list.ParentReference == null || string.IsNullOrEmpty(list.ParentReference.SiteId))
+                {
+                    return $"ParentReference or SiteId is missing for the list associated with container (drive) ID {containerId}.";
+                }
+
+                var createdColumn = await graphBetaClient.Sites[list.ParentReference.SiteId].Lists[list.Id].Columns.PostAsync(column);
+
+                if (createdColumn == null)
+                {
+                    return "Column creation failed.";
+                }
+
+                return JsonSerializer.Serialize(createdColumn, _jsonOptions);
+            }
+            catch (Exception ex)
+            {
+                return $"Error adding column: {ex.Message}";
+            }
+        }
 
         [McpServerTool, Description("Upload a file to a SharePoint Embedded container (drive). Supports large files.")]
         public static async Task<string> UploadFileToContainer(
@@ -230,9 +314,7 @@ namespace SpeMcp
             try
             {
                 // In SharePoint Embedded, the container ID is the drive ID
-                // Get children items based on the specified path
                 DriveItemCollectionResponse? result;
-
                 if (string.IsNullOrEmpty(folderPath))
                 {
                     // Get items from the root folder
@@ -240,26 +322,18 @@ namespace SpeMcp
                 }
                 else
                 {
-                    // For folder paths, use the path-based approach
                     try
                     {
-                        // Format the path correctly
                         var pathRequest = folderPath.StartsWith("/") ? folderPath : "/" + folderPath;
-
-                        // Remove trailing slash if present
                         if (pathRequest.EndsWith("/"))
                         {
                             pathRequest = pathRequest.Substring(0, pathRequest.Length - 1);
                         }
-
-                        // Get the folder as an item first
                         var folderItem = await graphClient.Drives[containerId].Root.ItemWithPath(pathRequest).GetAsync();
                         if (folderItem == null)
                         {
                             return $"Folder path '{folderPath}' not found in the container.";
                         }
-
-                        // Get children of the folder using its ID
                         result = await graphClient.Drives[containerId].Items[folderItem.Id].Children.GetAsync();
                     }
                     catch (Exception pathEx)
@@ -267,14 +341,10 @@ namespace SpeMcp
                         return $"Error accessing folder path '{folderPath}': {pathEx.Message}";
                     }
                 }
-
-                // Check if we got any results
                 if (result?.Value == null || !result.Value.Any())
                 {
                     return "No items found in the specified location.";
                 }
-
-                // Format the result nicely
                 return JsonSerializer.Serialize(result.Value, _jsonOptions);
             }
             catch (Exception ex)
@@ -284,3 +354,4 @@ namespace SpeMcp
         }
     }
 }
+
